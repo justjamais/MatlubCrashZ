@@ -42,38 +42,65 @@ final class AutoBreadcrumbs {
 
     // MARK: screens (UIKit; SwiftUI screens use the `.crashScreen("Name")` modifier)
 
+    // Both hooks *wrap* whatever implementation is installed at the time (ours or another SDK's) and always call
+    // it through, instead of exchanging selectors. That keeps the chain intact when Firebase, Mixpanel, Sentry etc.
+    // swizzle the same methods before or after us.
+
     private static var didSwizzleVC = false
     private static func swizzleViewDidAppear() {
-        guard !didSwizzleVC else { return }
+        guard !didSwizzleVC, let method = class_getInstanceMethod(UIViewController.self, #selector(UIViewController.viewDidAppear(_:))) else { return }
         didSwizzleVC = true
-        let cls = UIViewController.self
-        let sel = #selector(UIViewController.viewDidAppear(_:))
-        let swz = #selector(UIViewController.mc_viewDidAppear(_:))
-        guard let m1 = class_getInstanceMethod(cls, sel), let m2 = class_getInstanceMethod(cls, swz) else { return }
-        method_exchangeImplementations(m1, m2)
+        typealias Fn = @convention(c) (AnyObject, Selector, Bool) -> Void
+        let original = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+        let block: @convention(block) (AnyObject, Bool) -> Void = { obj, animated in
+            original(obj, #selector(UIViewController.viewDidAppear(_:)), animated)
+            if let vc = obj as? UIViewController { AutoBreadcrumbs.recordScreen(vc) }
+        }
+        method_setImplementation(method, imp_implementationWithBlock(block))
+    }
+
+    fileprivate static func recordScreen(_ vc: UIViewController) {
+        let name = String(describing: type(of: vc))
+        // Skip UIKit/SwiftUI plumbing controllers; app controllers are what a person would call "screens".
+        let noise = ["UIHostingController", "UINavigationController", "UITabBarController", "UISplitViewController", "_UI", "UIInputWindowController", "UIAlertController", "UIEditingOverlay", "UISystemInputAssist", "UIPageViewController", "PresentationHostingController", "UICompatibilityInputViewController", "UIPredictionViewController", "UIKeyboard"]
+        guard !noise.contains(where: { name.hasPrefix($0) }) else { return }
+        MatlubCrashZ.log("screen: \(name)", category: "navigation")
     }
 
     // MARK: network
 
     private static var didSwizzleTask = false
     private static func swizzleTaskResume() {
-        guard !didSwizzleTask else { return }
+        guard !didSwizzleTask, let method = class_getInstanceMethod(URLSessionTask.self, #selector(URLSessionTask.resume)) else { return }
         didSwizzleTask = true
-        let cls = URLSessionTask.self
-        guard let m1 = class_getInstanceMethod(cls, #selector(URLSessionTask.resume)),
-              let m2 = class_getInstanceMethod(cls, #selector(URLSessionTask.mc_resume)) else { return }
-        method_exchangeImplementations(m1, m2)
+        typealias Fn = @convention(c) (AnyObject, Selector) -> Void
+        let original = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+        let block: @convention(block) (AnyObject) -> Void = { obj in
+            if let task = obj as? URLSessionTask { AutoBreadcrumbs.recordRequest(task) }
+            original(obj, #selector(URLSessionTask.resume))
+        }
+        method_setImplementation(method, imp_implementationWithBlock(block))
     }
-}
 
-extension UIViewController {
-    @objc func mc_viewDidAppear(_ animated: Bool) {
-        mc_viewDidAppear(animated) // calls the original
-        let name = String(describing: type(of: self))
-        // Skip UIKit/SwiftUI plumbing controllers; app controllers are what a person would call "screens".
-        let noise = ["UIHostingController", "UINavigationController", "UITabBarController", "UISplitViewController", "_UI", "UIInputWindowController", "UIAlertController", "UIEditingOverlay", "UISystemInputAssist", "UIPageViewController", "PresentationHostingController", "UICompatibilityInputViewController", "UIPredictionViewController", "UIKeyboard"]
-        guard !noise.contains(where: { name.hasPrefix($0) }) else { return }
-        MatlubCrashZ.log("screen: \(name)", category: "navigation")
+    fileprivate static func recordRequest(_ task: URLSessionTask) {
+        // Log once per task, on first resume; completion is observed through KVO on `state`.
+        guard objc_getAssociatedObject(task, &taskStartKey) == nil, let req = task.originalRequest ?? task.currentRequest, let url = req.url else { return }
+        objc_setAssociatedObject(task, &taskStartKey, Date(), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        let method = req.httpMethod ?? "GET"
+        let short = URLSessionTask.mc_shortURL(url)
+        let obs = task.observe(\.state, options: [.new]) { task, _ in
+            guard task.state == .completed || task.state == .canceling else { return }
+            let started = objc_getAssociatedObject(task, &taskStartKey) as? Date ?? Date()
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            let status = (task.response as? HTTPURLResponse)?.statusCode
+            let level = task.error != nil || (status ?? 0) >= 400 ? "error" : "info"
+            var data: [String: String] = ["ms": String(ms)]
+            if let status { data["status"] = String(status) }
+            if let err = task.error { data["error"] = err.localizedDescription }
+            MatlubCrashZ.log("\(method) \(short)", category: "http", level: level, data: data)
+            objc_setAssociatedObject(task, &taskObserverKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        }
+        objc_setAssociatedObject(task, &taskObserverKey, obs, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 }
 
@@ -81,28 +108,6 @@ private var taskStartKey: UInt8 = 0
 private var taskObserverKey: UInt8 = 0
 
 extension URLSessionTask {
-    @objc func mc_resume() {
-        // Log once per task, on first resume.
-        if objc_getAssociatedObject(self, &taskStartKey) == nil, let req = originalRequest ?? currentRequest, let url = req.url {
-            objc_setAssociatedObject(self, &taskStartKey, Date(), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-            let method = req.httpMethod ?? "GET"
-            let short = Self.mc_shortURL(url)
-            let obs = observe(\.state, options: [.new]) { task, _ in
-                guard task.state == .completed || task.state == .canceling else { return }
-                let started = objc_getAssociatedObject(task, &taskStartKey) as? Date ?? Date()
-                let ms = Int(Date().timeIntervalSince(started) * 1000)
-                let status = (task.response as? HTTPURLResponse)?.statusCode
-                let level = task.error != nil || (status ?? 0) >= 400 ? "error" : "info"
-                var data: [String: String] = ["ms": String(ms)]
-                if let status { data["status"] = String(status) }
-                if let err = task.error { data["error"] = err.localizedDescription }
-                MatlubCrashZ.log("\(method) \(short)", category: "http", level: level, data: data)
-                objc_setAssociatedObject(task, &taskObserverKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-            }
-            objc_setAssociatedObject(self, &taskObserverKey, obs, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        }
-        mc_resume()
-    }
 
     /// host + path only: query strings and fragments often carry tokens.
     static func mc_shortURL(_ url: URL) -> String {
