@@ -36,10 +36,23 @@ final class BreadcrumbBuffer {
         self.onChange = onChange
     }
 
+    private let queue = DispatchQueue(label: "com.matlub.crash.breadcrumbs", qos: .utility)
+    private var flushScheduled = false
+
     func add(_ crumb: Breadcrumb) {
         lock.lock()
         items.append(crumb)
         if items.count > capacity { items.removeFirst(items.count - capacity) }
+        let schedule = !flushScheduled
+        flushScheduled = true
+        lock.unlock()
+        // Persist at most a few times per second: encoding 100 crumbs on every network request would add up.
+        if schedule { queue.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.flush() } }
+    }
+
+    private func flush() {
+        lock.lock()
+        flushScheduled = false
         let snapshot = items
         lock.unlock()
         if let data = try? Self.encoder.encode(snapshot), let json = String(data: data, encoding: .utf8) {

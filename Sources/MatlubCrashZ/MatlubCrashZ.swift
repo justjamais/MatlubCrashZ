@@ -14,7 +14,7 @@ import UIKit
 /// Call `start` as early as possible (App `init` or `application(_:didFinishLaunchingWithOptions:)`).
 /// Crashes are written to disk while the app dies and uploaded on the next launch.
 public enum MatlubCrashZ {
-    public static let sdkVersion = "1.1.0"
+    public static let sdkVersion = "1.1.1"
 
     nonisolated(unsafe) private static var shared: Core?
     private static let startLock = NSLock()

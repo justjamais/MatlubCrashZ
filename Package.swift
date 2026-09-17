@@ -16,6 +16,7 @@ let package = Package(
             dependencies: [
                 .product(name: "Recording", package: "KSCrash")
             ],
+            resources: [.copy("Resources/PrivacyInfo.xcprivacy")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]
