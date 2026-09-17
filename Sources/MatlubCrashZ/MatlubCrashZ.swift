@@ -14,7 +14,7 @@ import UIKit
 /// Call `start` as early as possible (App `init` or `application(_:didFinishLaunchingWithOptions:)`).
 /// Crashes are written to disk while the app dies and uploaded on the next launch.
 public enum MatlubCrashZ {
-    public static let sdkVersion = "1.0.0"
+    public static let sdkVersion = "1.1.0"
 
     nonisolated(unsafe) private static var shared: Core?
     private static let startLock = NSLock()
@@ -27,8 +27,19 @@ public enum MatlubCrashZ {
             return
         }
         SDKLog.enabled = configuration.debugLogging
-        shared = Core(configuration: configuration)
+        let remote = configuration.remoteConfig ? RemoteConfig.cached() : nil
+        if remote?.enabled == false {
+            // Kill switch from the server: do nothing this launch, but keep checking so it can be re-enabled.
+            SDKLog.info("disabled by remote config")
+            RemoteConfig.fetch(configuration: configuration)
+            return
+        }
+        shared = Core(configuration: configuration.applying(remote))
+        if configuration.remoteConfig { RemoteConfig.fetch(configuration: configuration) }
     }
+
+    /// The server-side overrides currently applied (cached from the previous launch), if any.
+    public static var remoteConfig: RemoteConfig? { RemoteConfig.cached() }
 
     /// Records something that happened; the last N breadcrumbs are attached to every report.
     public static func log(_ message: String, category: String = "default", level: String = "info", data: [String: String]? = nil) {
@@ -77,6 +88,8 @@ final class Core {
     let breadcrumbs: BreadcrumbBuffer
     let sessions: SessionTracker
     private var console: ConsoleCapture?
+    private var osLog: OSLogCapture?
+    private var auto: AutoBreadcrumbs?
 
     private let lock = NSLock()
     private var user: [String: String] = [:]
@@ -120,6 +133,14 @@ final class Core {
         drainKSCrashReports()
         console?.prune(keeping: [launchId])
         console?.start(launchId: launchId)
+        if configuration.captureOSLog, let console {
+            osLog = OSLogCapture(console: console, subsystems: configuration.osLogSubsystems)
+            osLog?.start()
+        }
+        if configuration.autoBreadcrumbs || configuration.networkBreadcrumbs {
+            auto = AutoBreadcrumbs(network: configuration.networkBreadcrumbs, screens: configuration.autoBreadcrumbs)
+            auto?.start()
+        }
 
         if configuration.enableMetricKit {
             metricKit = MetricKitCollector { [weak self] kind, json in
@@ -274,9 +295,6 @@ final class Core {
         })
         observers.append(nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
             MatlubCrashZ.log("app did enter background", category: "lifecycle")
-        })
-        observers.append(nc.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { _ in
-            MatlubCrashZ.log("memory warning", category: "lifecycle", level: "warning")
         })
     }
 }

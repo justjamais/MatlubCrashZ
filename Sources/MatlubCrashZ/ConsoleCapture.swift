@@ -69,6 +69,11 @@ final class ConsoleCapture {
         }
     }
 
+    /// Appends a line produced by the SDK itself (os_log mirror). Safe from any thread.
+    func appendLine(_ line: String) {
+        queue.async { [weak self] in self?.append(Data((line + "\n").utf8)) }
+    }
+
     /// Last `maxBytes` of the console log written by the launch with this id, if still on disk.
     func log(forLaunchId launchId: String) -> String? {
         let url = directory.appendingPathComponent(Self.fileName(for: launchId))

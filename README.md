@@ -51,8 +51,26 @@ MatlubCrashZ.crashedLastLaunch                            // Bool
 MatlubCrashZ.flush()                                      // upload pending reports now
 ```
 
+SwiftUI screens: `HomeView().crashScreen("Home")` records a navigation breadcrumb on every appearance
+(UIKit view controllers are recorded automatically).
+
 `Configuration` options: `environment`, `maxBreadcrumbs`, `maxPendingEvents`, `enableMetricKit`, `enableKSCrash`,
-`autoUpload`, `debugLogging`, `captureConsoleLog`, `reportResolvedHangs`.
+`autoUpload`, `debugLogging`, `captureConsoleLog`, `reportResolvedHangs`, `captureOSLog`, `osLogSubsystems`,
+`autoBreadcrumbs`, `networkBreadcrumbs`, `remoteConfig`.
+
+## What is collected automatically
+
+- **Breadcrumbs**: UIKit screen appearances, `URLSession` requests (method, host + path, status, duration — never query
+  strings or bodies), memory warnings, low-power mode, thermal state, active/inactive/background transitions.
+- **Console log**: `print` / `NSLog` / `printf` (stdout & stderr tee) and `os.Logger` / `os_log` entries of the process
+  (polled every 10 s), attached to the crash of the same launch.
+- **Sessions**: one launch = one session, reported in a single request after launch.
+
+## Remote configuration
+
+Once per launch the SDK fetches `GET /api/config` and caches it; the values apply on the *next* launch. From the panel's
+Setup page you can turn features on/off per app without shipping an update, including an `enabled` kill switch.
+Set `remoteConfig: false` to opt out.
 
 ## dSYMs
 

@@ -25,6 +25,16 @@ extension MatlubCrashZ {
         public var captureConsoleLog: Bool
         /// Also report main-thread hangs that recovered on their own (≥250 ms). Noisy; watchdog kills are reported regardless.
         public var reportResolvedHangs: Bool
+        /// Mirror `os.Logger` / `os_log` entries of this process into the console log (polled every 10 s).
+        public var captureOSLog: Bool
+        /// Only these os_log subsystems (prefix match). `nil` = everything except Apple's own.
+        public var osLogSubsystems: [String]?
+        /// Automatic breadcrumbs: screens (UIKit view controllers), memory warnings, low power, thermal, active/inactive.
+        public var autoBreadcrumbs: Bool
+        /// Automatic breadcrumbs for URLSession requests (method, host+path, status, duration). Query strings are never recorded.
+        public var networkBreadcrumbs: Bool
+        /// Fetch server-side overrides (`RemoteConfig`) once per launch and apply them on the next launch.
+        public var remoteConfig: Bool
 
         public init(
             serverURL: URL,
@@ -37,7 +47,12 @@ extension MatlubCrashZ {
             autoUpload: Bool = true,
             debugLogging: Bool = false,
             captureConsoleLog: Bool = true,
-            reportResolvedHangs: Bool = false
+            reportResolvedHangs: Bool = false,
+            captureOSLog: Bool = true,
+            osLogSubsystems: [String]? = nil,
+            autoBreadcrumbs: Bool = true,
+            networkBreadcrumbs: Bool = true,
+            remoteConfig: Bool = true
         ) {
             self.serverURL = serverURL
             self.apiKey = apiKey
@@ -50,6 +65,11 @@ extension MatlubCrashZ {
             self.debugLogging = debugLogging
             self.captureConsoleLog = captureConsoleLog
             self.reportResolvedHangs = reportResolvedHangs
+            self.captureOSLog = captureOSLog
+            self.osLogSubsystems = osLogSubsystems
+            self.autoBreadcrumbs = autoBreadcrumbs
+            self.networkBreadcrumbs = networkBreadcrumbs
+            self.remoteConfig = remoteConfig
         }
     }
 }
