@@ -1,0 +1,9 @@
+name: build
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build for iOS
+        run: xcodebuild -scheme MatlubCrashZ -destination 'generic/platform=iOS' -derivedDataPath /tmp/dd build | xcpretty || xcodebuild -scheme MatlubCrashZ -destination 'generic/platform=iOS' -derivedDataPath /tmp/dd build
