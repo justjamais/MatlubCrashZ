@@ -14,7 +14,7 @@ import UIKit
 /// Call `start` as early as possible (App `init` or `application(_:didFinishLaunchingWithOptions:)`).
 /// Crashes are written to disk while the app dies and uploaded on the next launch.
 public enum MatlubCrashZ {
-    public static let sdkVersion = "1.1.2"
+    public static let sdkVersion = "1.1.3"
 
     nonisolated(unsafe) private static var shared: Core?
     private static let startLock = NSLock()
@@ -118,9 +118,9 @@ final class Core {
         }
         kscrash = collector
 
-        breadcrumbs = BreadcrumbBuffer(capacity: configuration.maxBreadcrumbs) { [weak collector] json in
-            collector?.setUserInfo(json, forKey: "breadcrumbs")
-        }
+        breadcrumbs = BreadcrumbBuffer(capacity: configuration.maxBreadcrumbs,
+                                       directory: store.directory.deletingLastPathComponent(),
+                                       launchId: launchId)
 
         kscrash?.setUserInfo(launchId, forKey: "launchId")
         kscrash?.setUserInfo(configuration.environment, forKey: "environment")
@@ -131,6 +131,7 @@ final class Core {
 
         // Move reports left by the previous run into our upload queue (attaching that launch's console log).
         drainKSCrashReports()
+        breadcrumbs.prune(keeping: [launchId])
         console?.prune(keeping: [launchId])
         console?.start(launchId: launchId)
         if configuration.captureOSLog, let console {
@@ -191,10 +192,12 @@ final class Core {
         for report in reports {
             let kind = Self.kind(ofKSCrashReport: report)
             var consoleLog: String? = nil
+            var crumbs: [[String: Any]]? = nil
             if let user = report["user"] as? [String: Any], let id = user["launchId"] as? String {
                 consoleLog = console?.log(forLaunchId: id)
+                crumbs = breadcrumbs.persisted(forLaunchId: id)
             }
-            enqueue(source: "kscrash", kind: kind, payload: report, consoleLog: consoleLog)
+            enqueue(source: "kscrash", kind: kind, payload: report, consoleLog: consoleLog, breadcrumbs: crumbs)
         }
     }
 
@@ -211,7 +214,8 @@ final class Core {
         }
     }
 
-    func enqueue(source: String, kind: String, payload: [String: Any], consoleLog: String? = nil) {
+    func enqueue(source: String, kind: String, payload: [String: Any], consoleLog: String? = nil,
+                 breadcrumbs persisted: [[String: Any]]? = nil) {
         lock.lock()
         let userSnapshot = user
         let customSnapshot = custom
@@ -221,7 +225,7 @@ final class Core {
         // describe an earlier process, so the current buffer would only mislead.
         let crumbs: [[String: Any]]
         if source == "kscrash" {
-            crumbs = Self.breadcrumbs(fromKSCrashReport: payload)
+            crumbs = persisted ?? Self.breadcrumbs(fromKSCrashReport: payload)
         } else {
             crumbs = []
         }
@@ -241,6 +245,7 @@ final class Core {
         store.save(event)
     }
 
+    /// Reports written by SDK <= 1.1.2 kept breadcrumbs in KSCrash user info (usually truncated; parsed if intact).
     private static func breadcrumbs(fromKSCrashReport report: [String: Any]) -> [[String: Any]] {
         guard let user = report["user"] as? [String: Any],
               let json = user["breadcrumbs"] as? String,
